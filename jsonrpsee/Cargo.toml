@@ -45,6 +45,7 @@ client = ["http-client", "ws-client", "wasm-client", "client-ws-transport-tls", 
 client-core = ["jsonrpsee-core/client"]
 server = ["jsonrpsee-server", "server-core", "jsonrpsee-types", "tokio"]
 server-core = ["jsonrpsee-core/server"]
+ws-deflate = ["jsonrpsee-server/ws-deflate"]
 full = ["client", "server", "macros"]
 
 [package.metadata.docs.rs]

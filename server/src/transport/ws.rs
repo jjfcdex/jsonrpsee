@@ -437,6 +437,10 @@ where
 {
 	let mut server = soketto::handshake::http::Server::new();
 
+	for factory in &server_cfg.ws_extensions {
+		server.add_extension(factory.create());
+	}
+
 	match server.receive_request(&req) {
 		Ok(response) => {
 			let (tx, rx) = mpsc::channel(server_cfg.message_buffer_capacity as usize);

@@ -169,8 +169,26 @@ where
 	}
 }
 
+/// Factory to create WebSocket extensions for each new connection.
+///
+/// Each connection needs its own extension instance since extensions are stateful
+/// (e.g. compression context).
+pub trait WsExtensionFactory: Send + Sync + 'static {
+	/// Create a new extension instance for a connection.
+	fn create(&self) -> Box<dyn soketto::extension::Extension + Send>;
+}
+
+impl<F> WsExtensionFactory for F
+where
+	F: Fn() -> Box<dyn soketto::extension::Extension + Send> + Send + Sync + 'static,
+{
+	fn create(&self) -> Box<dyn soketto::extension::Extension + Send> {
+		(self)()
+	}
+}
+
 /// Static server configuration which is shared per connection.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ServerConfig {
 	/// Maximum size in bytes of a request.
 	pub(crate) max_request_body_size: u32,
@@ -200,10 +218,34 @@ pub struct ServerConfig {
 	pub(crate) keep_alive: Option<std::time::Duration>,
 	/// `KEEP_ALIVE_TIMEOUT` duration.
 	pub(crate) keep_alive_timeout: Duration,
+	/// WebSocket extension factories.
+	pub(crate) ws_extensions: Vec<Arc<dyn WsExtensionFactory>>,
+}
+
+impl std::fmt::Debug for ServerConfig {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("ServerConfig")
+			.field("max_request_body_size", &self.max_request_body_size)
+			.field("max_response_body_size", &self.max_response_body_size)
+			.field("max_connections", &self.max_connections)
+			.field("max_subscriptions_per_connection", &self.max_subscriptions_per_connection)
+			.field("batch_requests_config", &self.batch_requests_config)
+			.field("tokio_runtime", &self.tokio_runtime)
+			.field("enable_http", &self.enable_http)
+			.field("enable_ws", &self.enable_ws)
+			.field("message_buffer_capacity", &self.message_buffer_capacity)
+			.field("ping_config", &self.ping_config)
+			.field("id_provider", &self.id_provider)
+			.field("tcp_no_delay", &self.tcp_no_delay)
+			.field("keep_alive", &self.keep_alive)
+			.field("keep_alive_timeout", &self.keep_alive_timeout)
+			.field("ws_extensions", &self.ws_extensions.len())
+			.finish()
+	}
 }
 
 /// The builder to configure and create a JSON-RPC server configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ServerConfigBuilder {
 	/// Maximum size in bytes of a request.
 	max_request_body_size: u32,
@@ -233,6 +275,30 @@ pub struct ServerConfigBuilder {
 	keep_alive: Option<std::time::Duration>,
 	/// `KEEP_ALIVE_TIMEOUT` duration.
 	keep_alive_timeout: std::time::Duration,
+	/// WebSocket extension factories.
+	ws_extensions: Vec<Arc<dyn WsExtensionFactory>>,
+}
+
+impl std::fmt::Debug for ServerConfigBuilder {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("ServerConfigBuilder")
+			.field("max_request_body_size", &self.max_request_body_size)
+			.field("max_response_body_size", &self.max_response_body_size)
+			.field("max_connections", &self.max_connections)
+			.field("max_subscriptions_per_connection", &self.max_subscriptions_per_connection)
+			.field("batch_requests_config", &self.batch_requests_config)
+			.field("tokio_runtime", &self.tokio_runtime)
+			.field("enable_http", &self.enable_http)
+			.field("enable_ws", &self.enable_ws)
+			.field("message_buffer_capacity", &self.message_buffer_capacity)
+			.field("ping_config", &self.ping_config)
+			.field("id_provider", &self.id_provider)
+			.field("tcp_no_delay", &self.tcp_no_delay)
+			.field("keep_alive", &self.keep_alive)
+			.field("keep_alive_timeout", &self.keep_alive_timeout)
+			.field("ws_extensions", &self.ws_extensions.len())
+			.finish()
+	}
 }
 
 /// Builder for [`TowerService`].
@@ -374,6 +440,7 @@ impl Default for ServerConfigBuilder {
 			keep_alive: None,
 			//same as `hyper` default
 			keep_alive_timeout: Duration::from_secs(20),
+			ws_extensions: Vec::new(),
 		}
 	}
 }
@@ -541,6 +608,27 @@ impl ServerConfigBuilder {
 		self
 	}
 
+	/// Add a WebSocket extension factory.
+	///
+	/// Extensions are negotiated during the WebSocket handshake per [RFC 6455 §9](https://tools.ietf.org/html/rfc6455#section-9).
+	/// Each connection gets its own extension instance created by the factory.
+	///
+	/// # Example: enable permessage-deflate
+	///
+	/// Requires the `ws-deflate` feature.
+	///
+	/// ```rust,ignore
+	/// use soketto::extension::deflate::{Deflate, Mode};
+	///
+	/// let cfg = ServerConfigBuilder::new()
+	///     .add_ws_extension(|| Box::new(Deflate::new(Mode::Server)))
+	///     .build();
+	/// ```
+	pub fn add_ws_extension(mut self, factory: impl WsExtensionFactory) -> Self {
+		self.ws_extensions.push(Arc::new(factory));
+		self
+	}
+
 	/// Build the [`ServerConfig`].
 	pub fn build(self) -> ServerConfig {
 		ServerConfig {
@@ -558,6 +646,7 @@ impl ServerConfigBuilder {
 			tcp_no_delay: self.tcp_no_delay,
 			keep_alive: self.keep_alive,
 			keep_alive_timeout: self.keep_alive_timeout,
+			ws_extensions: self.ws_extensions,
 		}
 	}
 }
@@ -1045,6 +1134,10 @@ where
 			let this = self.inner.clone();
 
 			let mut server = soketto::handshake::http::Server::new();
+
+			for factory in &this.server_cfg.ws_extensions {
+				server.add_extension(factory.create());
+			}
 
 			let response = match server.receive_request(&request) {
 				Ok(response) => {

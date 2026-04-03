@@ -42,3 +42,7 @@ jsonrpsee-test-utils = { path = "../test-utils" }
 socket2 = { workspace = true }
 tower = { workspace = true, features = ["timeout"] }
 tracing-subscriber = { workspace = true }
+
+[features]
+default = []
+ws-deflate = ["soketto/deflate"]
