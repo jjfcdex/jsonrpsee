@@ -1140,7 +1140,8 @@ where
 			}
 
 			let response = match server.receive_request(&request) {
-				Ok(response) => {
+				Ok(mut response) => {
+					ws::remove_empty_extensions_header(&mut response);
 					let (tx, rx) = mpsc::channel(this.server_cfg.message_buffer_capacity as usize);
 					let sink = MethodSink::new(tx);
 

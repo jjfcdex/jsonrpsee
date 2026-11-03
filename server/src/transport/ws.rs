@@ -28,6 +28,19 @@ pub(crate) type Receiver = soketto::Receiver<BufReader<BufWriter<Compat<TokioIo<
 
 pub use soketto::handshake::http::is_upgrade_request;
 
+/// soketto writes `Sec-WebSocket-Extensions` whenever an extension is registered, even if the
+/// client offered none or none was negotiated. The resulting empty header makes strict clients
+/// (e.g. Node `ws`) fail the handshake, so drop it.
+pub(crate) fn remove_empty_extensions_header<B>(response: &mut ::http::Response<B>) {
+	let empty = response
+		.headers()
+		.get(::http::header::SEC_WEBSOCKET_EXTENSIONS)
+		.is_some_and(|v| v.as_bytes().iter().all(u8::is_ascii_whitespace));
+	if empty {
+		response.headers_mut().remove(::http::header::SEC_WEBSOCKET_EXTENSIONS);
+	}
+}
+
 enum Incoming {
 	Data(Vec<u8>),
 	Pong,
@@ -442,7 +455,8 @@ where
 	}
 
 	match server.receive_request(&req) {
-		Ok(response) => {
+		Ok(mut response) => {
+			remove_empty_extensions_header(&mut response);
 			let (tx, rx) = mpsc::channel(server_cfg.message_buffer_capacity as usize);
 			let sink = MethodSink::new(tx);
 
